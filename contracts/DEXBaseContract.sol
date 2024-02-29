@@ -126,5 +126,20 @@ contract DEXBaseContract {
         emit PositionClosed(msg.sender, position.amount, position.isLong, closePrice);
     }
 
+    //function to get the current price
+    function getCurrentPrice() public view returns (uint256) {
+        //oracle pricefeed if not development
+        /* (
+            uint80 roundID,
+            int256 price,
+            uint256 startedAt,
+            uint256 timeStamp,
+            uint80 answeredInRound
+        ) = priceFeed.latestRoundData();  
+        */
+        require(mockPrice > 0, "Invalid price data");		
+        return mockPrice; // Assuming mockPrice is already defined as uint256
+	}
+
 }
 
