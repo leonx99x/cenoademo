@@ -51,6 +51,14 @@ contract DEXBaseContract {
     function _getCurrentTime() internal view returns (uint256) {
         return currentTime;
     }
-    
+    //mock prices setter added since oracle is not used
+    function setMockPrice(uint256 _mockPrice) external onlyInDevelopment{
+		mockPrice = _mockPrice;
+	}
+
+	function getCurrentPrice() public view returns (uint256) {
+		return mockPrice; // Use the mock price
+	}
+
 }
 
