@@ -3,10 +3,12 @@
 pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./DEXRewardsContract.sol";
 
 
 contract DEXBaseContract {
+    using SafeERC20 for IERC20;
     IERC20 public baseCurrency;
     //address public priceFeed;
     uint256 public currentTime = block.timestamp;
@@ -80,7 +82,7 @@ contract DEXBaseContract {
         uint256 openPrice = getCurrentPrice();
 
         // Transfer base currency from trader to the contract as collateral
-        require(baseCurrency.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        require(baseCurrency.safeTransferFrom(msg.sender, address(this), amount), "Transfer failed");
 		
         Position memory newPosition = Position({
             trader: msg.sender,
@@ -118,7 +120,7 @@ contract DEXBaseContract {
         uint256 returnAmount = position.amount + pnl;
         
         // Transfer the base currency back to the trader
-        require(baseCurrency.transfer(msg.sender, returnAmount), "Transfer failed");
+        require(baseCurrency.safeTransfer(msg.sender, returnAmount), "Transfer failed");
 
         // Remove the position
         delete positions[msg.sender][positionIndex];

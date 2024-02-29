@@ -23,5 +23,7 @@ contract DexRewardsContract {
     mapping(address => uint256) public userTradingVolume;
     mapping(address => UserRewards) public userRewards;
 
+    event RewardPaid(address indexed user, uint256 reward);
+
     
 }
