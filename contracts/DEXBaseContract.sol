@@ -9,10 +9,13 @@ import "./DEXRewardsContract.sol";
 contract DEXBaseContract {
     IERC20 public baseCurrency;
     //address public priceFeed;
-
+    uint256 public currentTime = block.timestamp;
     uint256 public mockPrice = 1000 * 10**18;
     DEXRewardsContract public dexRewardsContract;
     bool public isDevelopment;
+
+    // Mapping of positions by trader
+    mapping(address => Position[]) public positions;
 
     struct Position {
         address trader;
@@ -40,6 +43,14 @@ contract DEXBaseContract {
 		dexRewardsContract = DEXRewardsContract(_dexRewardsContract);
 		isDevelopment = _isDevelopment;
 	}
+    //set current time for development and test purposes
+    function setCurrentTime(uint256 _time) external onlyInDevelopment{
+        currentTime = _time;
+    }
 
+    function _getCurrentTime() internal view returns (uint256) {
+        return currentTime;
+    }
+    
 }
 
