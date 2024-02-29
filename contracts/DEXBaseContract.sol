@@ -13,7 +13,7 @@ contract DEXBaseContract {
     //address public priceFeed;
     uint256 public currentTime = block.timestamp;
     uint256 public mockPrice = 1000 * 10**18;
-    DEXRewardsContract public dexRewardsContract;
+    DexRewardsContract public dexRewardsContract;
     bool public isDevelopment;
 
     // Mapping of positions by trader
@@ -42,7 +42,7 @@ contract DEXBaseContract {
 	
 	constructor(address _baseCurrency, address _dexRewardsContract, bool _isDevelopment) {
 		baseCurrency = IERC20(_baseCurrency);
-		dexRewardsContract = DEXRewardsContract(_dexRewardsContract);
+		dexRewardsContract = DexRewardsContract(_dexRewardsContract);
 		isDevelopment = _isDevelopment;
 	}
 
@@ -65,24 +65,32 @@ contract DEXBaseContract {
         require(_mockPrice > 0, "Price cannot be negative");
 		mockPrice = _mockPrice;
 	}
-
-	function getCurrentPrice() public view returns (uint256) {
-		return mockPrice; // Use the mock price
+    //function to get the current price
+    function getCurrentPrice() public view returns (uint256) {
+        //oracle pricefeed if not development
+        /* (
+            uint80 roundID,
+            int256 price,
+            uint256 startedAt,
+            uint256 timeStamp,
+            uint80 answeredInRound
+        ) = priceFeed.latestRoundData();  
+        */
+        require(mockPrice > 0, "Invalid price data");		
+        return mockPrice; 
 	}
 
      // Function to open a long or short position
     function openPosition(uint256 amount, bool isLong, uint256 leverage) external {
-		if (_getCurrentTime() > startTime + REWARD_PERIOD) {
-			// Start new period
-			startTime = block.timestamp;
-			totalTradingVolume = 0;
+		if (_getCurrentTime() > dexRewardsContract.startTime() + dexRewardsContract.REWARD_PERIOD()) {
+			dexRewardsContract.startNewPeriod();
 		} 
         require(amount > 0, "Amount must be greater than 0");
         require(leverage >= 1, "Leverage must be at least 1");
         uint256 openPrice = getCurrentPrice();
 
         // Transfer base currency from trader to the contract as collateral
-        require(baseCurrency.safeTransferFrom(msg.sender, address(this), amount), "Transfer failed");
+        baseCurrency.safeTransferFrom(msg.sender, address(this), amount);
 		
         Position memory newPosition = Position({
             trader: msg.sender,
@@ -100,10 +108,8 @@ contract DEXBaseContract {
 
     // Function to close a position
     function closePosition(uint256 positionIndex) external {
-		if (_getCurrentTime() > startTime + REWARD_PERIOD) {
-			// Start new period
-			startTime = block.timestamp;
-			totalTradingVolume = 0;
+		if (_getCurrentTime() > dexRewardsContract.startTime() + dexRewardsContract.REWARD_PERIOD()) {
+			dexRewardsContract.startNewPeriod();
 		}
         Position storage position = positions[msg.sender][positionIndex];
         require(position.trader == msg.sender, "Not the position owner");
@@ -118,9 +124,9 @@ contract DEXBaseContract {
 
         // Calculate the amount to return to the trader
         uint256 returnAmount = position.amount + pnl;
-        
-        // Transfer the base currency back to the trader
-        require(baseCurrency.safeTransfer(msg.sender, returnAmount), "Transfer failed");
+
+        //transfer funds to the trader       
+        baseCurrency.safeTransfer(msg.sender, returnAmount);
 
         // Remove the position
         delete positions[msg.sender][positionIndex];
@@ -128,20 +134,7 @@ contract DEXBaseContract {
         emit PositionClosed(msg.sender, position.amount, position.isLong, closePrice);
     }
 
-    //function to get the current price
-    function getCurrentPrice() public view returns (uint256) {
-        //oracle pricefeed if not development
-        /* (
-            uint80 roundID,
-            int256 price,
-            uint256 startedAt,
-            uint256 timeStamp,
-            uint80 answeredInRound
-        ) = priceFeed.latestRoundData();  
-        */
-        require(mockPrice > 0, "Invalid price data");		
-        return mockPrice; // Assuming mockPrice is already defined as uint256
-	}
+    
 
 }
 

@@ -3,9 +3,10 @@ pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "./IDexRewardsContract.sol";
 //import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
-contract DexRewardsContract {
+contract DexRewardsContract is IDexRewardsContract, Ownable{
 
     IERC20 public rewardsToken;
     uint256 public constant REWARD_PERIOD = 30 days;
@@ -28,7 +29,8 @@ contract DexRewardsContract {
 
     event RewardPaid(address indexed user, uint256 reward);
 
-    constructor(address _rewardsTokenAddress) {
+    constructor(address _rewardsTokenAddress, address _owner) Ownable(_owner) {
+        require(_rewardsTokenAddress != address(0), "Token address cannot be the zero address");
         rewardsToken = IERC20(_rewardsTokenAddress);
         startTime = block.timestamp;
         lastUpdateTime = block.timestamp;
@@ -48,6 +50,11 @@ contract DexRewardsContract {
             userRewards[account].userRewardPerTokenPaid = rewardPerTokenStored;
         }
         _;
+    }
+    function startNewPeriod() external override {
+        require(msg.sender == address(dexBaseContract), "Caller must be DEXBaseContract");
+        startTime = block.timestamp;
+        totalTradingVolume = 0;
     }
 	function recordTradingVolume(address trader, uint256 amount) external {
         require(msg.sender == address(dexBaseContract), "Only the DEX contract can call this function");
@@ -80,7 +87,7 @@ contract DexRewardsContract {
                 (rewardPerToken() - userRewards[account].userRewardPerTokenPaid) +
                 userRewards[account].rewards) / 10**18;
     }
-    function setDexBaseContract(address _address) external  onlyOwner {
+    function setDexBaseContract(address _address) external onlyOwner {
         dexBaseContract = _address;
     }
 
