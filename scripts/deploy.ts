@@ -2,13 +2,13 @@ import { ethers } from "hardhat";
 
 async function main() {
   const [deployer] = await ethers.getSigners();
-  console.log("Deploying contracts with the account:", deployer.address);
+  console.log("Deploying contracts with the account:", deployer.getAddress());
 
   // Deploy MockRewardToken
   const MockRewardToken = await ethers.getContractFactory("MockRewardToken");
-  const mockRewardToken = await MockRewardToken.deploy(); // Directly returns the contract instance
-  await mockRewardToken.deploymentTransaction()?.wait();
-  console.log("MockRewardToken deployed to:", mockRewardToken.getAddress());
+  const mockRewardToken = await MockRewardToken.deploy();
+  await mockRewardToken.waitForDeployment();
+  console.log("MockRewardToken deployed to:", mockRewardToken.address);
 
   // Deploy DexRewardsContract with the address of MockRewardToken
   const DexRewardsContract = await ethers.getContractFactory(
@@ -17,7 +17,7 @@ async function main() {
   const dexRewardsContract = await DexRewardsContract.deploy(
     mockRewardToken.getAddress()
   );
-  await dexRewardsContract.deploymentTransaction()?.wait();
+  await dexRewardsContract.waitForDeployment();
   console.log(
     "DexRewardsContract deployed to:",
     dexRewardsContract.getAddress()
@@ -30,8 +30,12 @@ async function main() {
     dexRewardsContract.getAddress(),
     true
   );
-  await dexBaseContract.deploymentTransaction()?.wait();
+  await dexBaseContract.waitForDeployment();
+  await dexRewardsContract.setDexBaseContract(dexBaseContract.getAddress());
   console.log("DEXBaseContract deployed to:", dexBaseContract.getAddress());
+  console.log("MockRewardToken address:", mockRewardToken.getAddress());
+  console.log("DexRewardsContract address:", dexRewardsContract.getAddress());
+  console.log("DEXBaseContract address:", dexBaseContract.getAddress());
 }
 
 main().catch((error) => {

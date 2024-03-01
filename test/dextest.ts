@@ -4,7 +4,7 @@ import {
   DexRewardsContract,
   DEXBaseContract,
   MockRewardToken,
-} from "..contracts/typechain/index";
+} from "../typechain";
 
 describe("DEX and Rewards Simulation", function () {
   let dexBaseContract: DEXBaseContract;
@@ -15,62 +15,85 @@ describe("DEX and Rewards Simulation", function () {
   before(async function () {
     accounts = await ethers.getSigners();
 
-    const MockRewardToken = await ethers.getContractFactory("MockRewardToken");
-    mockRewardToken = await MockRewardToken.deploy();
-    await mockRewardToken.deployed();
+    // Deploy MockRewardToken
+    const MockRewardTokenFactory = await ethers.getContractFactory(
+      "MockRewardToken"
+    );
+    mockRewardToken = await MockRewardTokenFactory.deploy();
+    await mockRewardToken.waitForDeployment();
+    console.log("MockRewardToken deployed to:", mockRewardToken.getAddress());
 
-    const DexRewardsContract = await ethers.getContractFactory(
+    // Deploy DexRewardsContract (assuming Ownable's constructor does not actually take parameters)
+    const DexRewardsContractFactory = await ethers.getContractFactory(
       "DexRewardsContract"
     );
-    dexRewardsContract = await DexRewardsContract.deploy(
-      mockRewardToken.address
+    dexRewardsContract = await DexRewardsContractFactory.deploy(
+      mockRewardToken.getAddress(),
+      accounts[0].address
     );
-    await dexRewardsContract.deployed();
+    await dexRewardsContract.waitForDeployment();
+    console.log(
+      "DexRewardsContract deployed to:",
+      dexRewardsContract.getAddress()
+    );
 
-    const DEXBaseContract = await ethers.getContractFactory("DEXBaseContract");
-    dexBaseContract = await DEXBaseContract.deploy(
-      mockRewardToken.address,
-      dexRewardsContract.address,
+    // Deploy DEXBaseContract
+    const DEXBaseContractFactory = await ethers.getContractFactory(
+      "DEXBaseContract"
+    );
+    dexBaseContract = await DEXBaseContractFactory.deploy(
+      mockRewardToken.getAddress(),
+      dexRewardsContract.getAddress(),
       true
     );
-    await dexBaseContract.deployed();
+    await dexBaseContract.waitForDeployment();
+    await dexRewardsContract.setDexBaseContract(
+      await dexBaseContract.getAddress()
+    );
+    console.log("DEXBaseContract deployed to:", dexBaseContract.getAddress());
 
-    // Assuming the DEXRewardsContract needs to know the DEXBaseContract address
-    await dexRewardsContract.setDexBaseContract(dexBaseContract.address);
-  });
-
-  it("Simulates transactions over five periods with four traders", async function () {
-    // Example: Give all traders some tokens (mock setup)
-    for (let i = 0; i < 4; i++) {
+    // Transfer tokens to other accounts for trading
+    for (let i = 1; i <= 4; i++) {
       await mockRewardToken.transfer(
         accounts[i].address,
-        ethers.utils.parseEther("1000")
+        ethers.parseEther("1000")
       );
+      console.log(`Transferred 1000 tokens to account ${i}`);
     }
-
-    // Simulate trading activity and rewards over five periods
+    await mockRewardToken.transfer(
+      await dexRewardsContract.getAddress(),
+      ethers.parseEther("100000")
+    );
+    await dexRewardsContract.transferOwnership(
+      await dexBaseContract.getAddress()
+    );
+  });
+  it("Simulates transactions over five periods with four traders", async function () {
     for (let period = 0; period < 5; period++) {
-      // Example trading activity
-      await dexBaseContract.openPosition(
-        ethers.utils.parseEther("100"),
-        true,
-        1,
-        { from: accounts[0].address }
-      );
-      await dexBaseContract.openPosition(
-        ethers.utils.parseEther("50"),
-        false,
-        1,
-        { from: accounts[1].address }
-      );
-
-      // Move to the next period by adjusting time (simplified, adjust according to your contract's time handling)
-      await ethers.provider.send("evm_increaseTime", [30 * 24 * 60 * 60]); // 30 days
+      console.log("Starting period", period);
+      console.log("Opening positions for accounts 1 and 2");
+      const approve = await mockRewardToken
+        .connect(accounts[1])
+        .approve(await dexBaseContract.getAddress(), ethers.parseEther("100"));
+      await mockRewardToken
+        .connect(accounts[2])
+        .approve(await dexBaseContract.getAddress(), ethers.parseEther("50"));
+      await dexBaseContract
+        .connect(accounts[1])
+        .openPosition(ethers.parseEther("100"), true, 1);
+      console.log("Opened position for account 1");
+      await ethers.provider.send("evm_mine", []);
+      await dexBaseContract
+        .connect(accounts[2])
+        .openPosition(ethers.parseEther("50"), false, 1);
+      console.log("Opened position for account 2");
       await ethers.provider.send("evm_mine", []);
 
-      // Claim rewards at the end of the period (simplified logic)
-      await dexRewardsContract.claimRewards({ from: accounts[0].address });
-      await dexRewardsContract.claimRewards({ from: accounts[1].address });
+      await ethers.provider.send("evm_increaseTime", [30 * 24 * 60 * 60]); // 30 days
+      console.log("Time increased by 30 days");
+
+      await dexRewardsContract.connect(accounts[1]).claimRewards();
+      await dexRewardsContract.connect(accounts[2]).claimRewards();
     }
   });
 });
