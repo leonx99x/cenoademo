@@ -5,9 +5,9 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./DEXRewardsContract.sol";
+import "./ISharedDefinitions.sol";
 
-
-contract DEXBaseContract {
+contract DEXBaseContract is ISharedDefinitions {
     using SafeERC20 for IERC20;
     IERC20 public baseCurrency;
     //address public priceFeed;
@@ -15,17 +15,11 @@ contract DEXBaseContract {
     uint256 public mockPrice = 100 * 10**18;
     DexRewardsContract public dexRewardsContract;
     bool public isDevelopment;
-
+    
     // Mapping of positions by trader
     mapping(address => Position[]) public positions;
 
-    struct Position {
-        address trader;
-        uint256 amount;
-        bool isLong;
-        uint256 openPrice;
-        uint256 leverage;
-    }
+    
 	// modifier for development mode
     modifier onlyInDevelopment() {
 		require(isDevelopment, "This function is only available in development mode.");
@@ -82,9 +76,9 @@ contract DEXBaseContract {
 
      // Function to open a long or short position
     function openPosition(uint256 amount, bool isLong, uint256 leverage) external {
-		if (_getCurrentTime() > dexRewardsContract.startTime() + dexRewardsContract.REWARD_PERIOD()) {
-			dexRewardsContract.startNewPeriod();
-		} 
+		if (dexRewardsContract.isPeriodEnded()) {
+            dexRewardsContract.addNewPeriod();
+        }
         require(amount > 0, "Amount must be greater than 0");
         require(leverage >= 1, "Leverage must be at least 1");
         uint256 openPrice = getCurrentPrice();
@@ -97,20 +91,20 @@ contract DEXBaseContract {
             amount: amount,
             isLong: isLong,
             openPrice: openPrice,
-            leverage: leverage
+            leverage: leverage,
+            timestamp: block.timestamp
         });
 
         positions[msg.sender].push(newPosition);
-		dexRewardsContract.recordTradingVolume(msg.sender, amount);
-
+        dexRewardsContract.addTransactionToPeriod(newPosition.amount, newPosition.trader);
         emit PositionOpened(msg.sender, amount, isLong, openPrice, leverage);
     }
 
     // Function to close a position
     function closePosition(uint256 positionIndex) external {
-		if (_getCurrentTime() > dexRewardsContract.startTime() + dexRewardsContract.REWARD_PERIOD()) {
-			dexRewardsContract.startNewPeriod();
-		}
+		if (dexRewardsContract.isPeriodEnded()) {
+            dexRewardsContract.addNewPeriod();
+        }
         Position storage position = positions[msg.sender][positionIndex];
         require(position.trader == msg.sender, "Not the position owner");
         uint256 closePrice = getCurrentPrice();
@@ -130,11 +124,8 @@ contract DEXBaseContract {
 
         // Remove the position
         delete positions[msg.sender][positionIndex];
-		dexRewardsContract.recordTradingVolume(msg.sender, position.amount);
+        dexRewardsContract.addTransactionToPeriod(position.amount, position.trader);
         emit PositionClosed(msg.sender, position.amount, position.isLong, closePrice);
     }
-
-    
-
 }
 
