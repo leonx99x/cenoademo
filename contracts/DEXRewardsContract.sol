@@ -1,135 +1,139 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.20;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./IDexRewardsContract.sol";
-//import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "./DEXBaseContract.sol";
+import "./ISharedDefinitions.sol";
 
-contract DexRewardsContract is IDexRewardsContract, Ownable{
+contract DexRewardsContract is
+    ISharedDefinitions,
+    IDexRewardsContract,
+    Ownable
+{
+    using SafeERC20 for IERC20;
 
     IERC20 public rewardsToken;
     uint256 public constant REWARD_PERIOD = 30 days;
-    uint256 public lastUpdateTime;
-    uint256 public rewardPerTokenStored;
-    uint256 public totalTradingVolume;
-    uint256 public startTime;
+    uint256 public constant REWARD_RATE = 387 * 10 ** 18; // Total rewards to distribute per period
+    uint256 tradeNumber = 0; //resets every period
     address public dexBaseContract;
-    uint256 public constant TOTAL_REWARD = 387 * 10**18;
-    uint256 public constant REWARD_RATE = TOTAL_REWARD / REWARD_PERIOD; 
-
-    struct UserRewards {
-        uint256 userRewardPerTokenPaid;
-        uint256 rewards;
-        uint256 lastActiveTime;
-    }
-
-    mapping(address => uint256) public userTradingVolume;
-    mapping(address => UserRewards) public userRewards;
+    uint256 public currentPeriodId;
+    mapping(uint256 => Period) public periods;
+    mapping(address => uint256) public lastClaimedPeriod;
 
     event RewardPaid(address indexed user, uint256 reward);
 
-    constructor(address _rewardsTokenAddress, address _owner) Ownable(_owner) {
-        require(_rewardsTokenAddress != address(0), "Token address cannot be the zero address");
+    constructor(
+        address _rewardsTokenAddress,
+        address initialOwner
+    ) Ownable(initialOwner) {
         rewardsToken = IERC20(_rewardsTokenAddress);
-        startTime = block.timestamp;
-        lastUpdateTime = block.timestamp;
-    }
-    function calculateReward(uint256 userVolume, uint256 totalVolume) public view returns (uint256) {
-        if (totalVolume == 0) return 0;
-
-        uint256 userShare = (userVolume * REWARD_RATE * (lastTimeRewardApplicable() - lastUpdateTime)) / totalVolume;
-        return userShare; // Scale down as necessary depending on how REWARD_RATE was scaled up
+        currentPeriodId = 1;
+        Period storage firstPeriod = periods[currentPeriodId];
+        firstPeriod.startTime = block.timestamp;
+        firstPeriod.endTime = block.timestamp + REWARD_PERIOD;
+        firstPeriod.totalVolume = 0;
     }
 
-    modifier updateReward(address account) {
-        rewardPerTokenStored = rewardPerToken();
-        lastUpdateTime = lastTimeRewardApplicable();
-        if (account != address(0)) {
-            userRewards[account].rewards = earned(account);
-            userRewards[account].userRewardPerTokenPaid = rewardPerTokenStored;
-        }
+    modifier onlyDexBaseContract() {
+        require(msg.sender == dexBaseContract, "Caller is not DEXBaseContract");
         _;
     }
-    function startNewPeriod() external override {
-        require(msg.sender == address(dexBaseContract), "Caller must be DEXBaseContract");
-        startTime = block.timestamp;
-        totalTradingVolume = 0;
+
+    function recordTrade(address trader, uint256 amount) external onlyOwner {
+        if (block.timestamp > periods[currentPeriodId].endTime) {
+            tradeNumber = 0;
+            currentPeriodId++;
+            periods[currentPeriodId].startTime = block.timestamp;
+            periods[currentPeriodId].endTime = block.timestamp + REWARD_PERIOD;
+            periods[currentPeriodId].totalVolume = 0;
+            periods[currentPeriodId].totalTradeNumber = 0;
+        }
+        Period storage period = periods[currentPeriodId];
+        period.totalVolume += amount;
+        tradeNumber++;
+        period.totalTradeNumber++;
+        period.trades[trader].push(
+            Trade(block.timestamp, amount, period.totalVolume, tradeNumber)
+        );
     }
-	function recordTradingVolume(address trader, uint256 amount) external {
-        require(msg.sender == address(dexBaseContract), "Only the DEX contract can call this function");
 
-        // Update the last active time for the trader
-        UserRewards storage userReward = userRewards[trader];
-        userReward.lastActiveTime = block.timestamp;
+    function isPeriodEnded() public view returns (bool) {
+        return block.timestamp > periods[currentPeriodId].endTime;
+    }
+    function notifyNewTransaction(address trader, uint256 amount) external onlyDexBaseContract{
+        // Record the transaction
+        addTradeToPeriod(amount, trader);
+    }
+    function addTradeToPeriod(uint256 amount, address traderAddress) public onlyDexBaseContract{
+        // Increment the transaction number
+        tradeNumber++;
+        Trade memory newTrade = Trade({
+            timestamp: block.timestamp,
+            traderVolume: periods[currentPeriodId].trades[traderAddress].traderVolume + amount,
+            totalVolumeAtTrade: periods[currentPeriodId].totalVolumeAtTrade + amount,
+            tradeNumber: tradeNumber
+        });
+        periods[currentPeriodId].trades[traderAddress].push(newTrade);
+    }
 
-        // Update trading volume if within the current reward period
-        if (block.timestamp <= startTime + REWARD_PERIOD) {
-            userTradingVolume[trader] += amount;
-            totalTradingVolume += amount;
+    function addNewPeriod() public onlyDexBaseContract {
+        uint256 periodEndTime;
+        currentPeriodId++;
+        if (periods[currentPeriodId].startTime == 0) {
+            periodEndTime = block.timestamp + REWARD_PERIOD;
+        } else {
+            require(isPeriodEnded() == true, "Period has not ended yet");
+            // If not the first period, calculate the end time based on the last period's end time
+            periodEndTime =
+                periods[currentPeriodId - 1].endTime +
+                REWARD_PERIOD;
+        }
+        Period storage newPeriod = periods[currentPeriodId];
+        newPeriod.startTime = block.timestamp;
+        newPeriod.endTime = block.timestamp + REWARD_PERIOD;
+        newPeriod.totalVolume = 0;
+    }
+
+    function claimReward(address trader) external {
+        require(
+            lastClaimedPeriod[trader] < currentPeriodId,
+            "Rewards already claimed for the latest period"
+        );
+
+        uint256 rewardToClaim = 0;
+        for (
+            uint256 periodId = lastClaimedPeriod[trader] + 1;
+            periodId <= currentPeriodId;
+            periodId++
+        ) {
+            Period storage period = periods[periodId];
+            Trade[] storage selectedTradersTrades = period.trades[trader];
+            uint256 periodReward = 0;
+            for (
+                uint256 i = selectedTradersTrades[0].tradeNumber;
+                i <
+                period.totalTradeNumber - selectedTradersTrades[0].tradeNumber;
+                i++
+            ) {
+                Trade storage trade = selectedTradersTrades[i];
+                uint256 timeWeight = trade.timestamp -
+                    selectedTradersTrades[i + 1].timestamp;
+                uint256 volumeShare = trade.traderVolume /
+                    trade.totalVolumeAtTrade;
+                periodReward += (volumeShare * timeWeight);
+            }
+            periodReward *= REWARD_RATE;
+            rewardToClaim += periodReward;
+        }
+
+        lastClaimedPeriod[trader] = currentPeriodId;
+        if (rewardToClaim > 0) {
+            rewardsToken.safeTransfer(trader, rewardToClaim);
+            emit RewardPaid(trader, rewardToClaim);
         }
     }
-
-    function lastTimeRewardApplicable() public view returns (uint256) {
-        return block.timestamp > startTime + REWARD_PERIOD ? startTime + REWARD_PERIOD : block.timestamp;
-    }
-
-    function rewardPerToken() public view returns (uint256) {
-        if (totalTradingVolume == 0) {
-            return rewardPerTokenStored;
-        }
-        return rewardPerTokenStored +
-            (((lastTimeRewardApplicable() - lastUpdateTime) * REWARD_RATE) / totalTradingVolume);
-    }
-
-    function earned(address account) public view returns (uint256) {
-        return (userTradingVolume[account] *
-                (rewardPerToken() - userRewards[account].userRewardPerTokenPaid) +
-                userRewards[account].rewards) / 10**18;
-    }
-    function setDexBaseContract(address _address) external onlyOwner {
-        dexBaseContract = _address;
-    }
-
-    function stake(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "Cannot stake 0");
-        totalTradingVolume += amount;
-        userTradingVolume[msg.sender] += amount;
-        userRewards[msg.sender].lastActiveTime = block.timestamp;
-    }
-    function withdraw(uint256 amount) external updateReward(msg.sender) {
-        require(amount > 0, "Cannot withdraw 0");
-        totalTradingVolume -= amount;
-        userTradingVolume[msg.sender] -= amount;
-        // Return the tokens to the user
-    }
-
-    function getReward() external updateReward(msg.sender) {
-        uint256 reward = userRewards[msg.sender].rewards;
-        if (reward > 0) {
-            userRewards[msg.sender].rewards = 0;
-            rewardsToken.transfer(msg.sender, reward);
-            emit RewardPaid(msg.sender, reward);
-        }
-    }
-	function claimRewards() external {
-        require(userRewards[msg.sender].lastActiveTime >= startTime, "No operations in the current period");
-        uint256 reward = earned(msg.sender);
-        
-        // Ensure these state changes happen after calculations and before the transfer
-        userTradingVolume[msg.sender] = 0;
-        userRewards[msg.sender].rewards = 0;
-        userRewards[msg.sender].lastActiveTime = block.timestamp;
-        
-        // Transfer the reward to the trader
-        rewardsToken.transfer(msg.sender, reward);
-        emit RewardPaid(msg.sender, reward);
-        
-        // Reset the trading volume if a new period started
-        if (block.timestamp > startTime + REWARD_PERIOD) {
-            startTime = block.timestamp;
-            totalTradingVolume = 0;
-        }
-    }
-
 }
