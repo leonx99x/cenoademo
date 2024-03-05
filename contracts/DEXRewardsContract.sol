@@ -8,6 +8,8 @@ import "./IDexRewardsContract.sol";
 import "./DEXBaseContract.sol";
 import "./ISharedDefinitions.sol";
 
+import "hardhat/console.sol";
+
 contract DexRewardsContract is
     ISharedDefinitions,
     IDexRewardsContract,
@@ -17,123 +19,155 @@ contract DexRewardsContract is
 
     IERC20 public rewardsToken;
     uint256 public constant REWARD_PERIOD = 30 days;
-    uint256 public constant REWARD_RATE = 387 * 10 ** 18; // Total rewards to distribute per period
-    uint256 tradeNumber = 0; //resets every period
-    address public dexBaseContract;
-    uint256 public currentPeriodId;
-    mapping(uint256 => Period) public periods;
-    mapping(address => uint256) public lastClaimedPeriod;
+    uint256 public constant REWARD_RATE = 387; // Total rewards to distribute per period
 
+    uint256 lastPeriodIndex = 0; 
+    uint256 lastTradeIndex = 0;
+    uint256 lastPeriodEndTime = 0;
+    Trade[] public trades;
+    mapping(uint256 => uint256) public periodToTradeMap;
+    mapping(address => uint256) public traderToTradeIdMap;
+    mapping(uint256 => mapping(address => uint256[])) public periodTraderToTradeIdMap;
+    mapping(address => uint256) public lastClaimedPeriod;
+    address public dexBaseContract;
+
+    event TradeRecorded(uint256 periodId, address trader, uint256 amount, uint256 tradeNumber, uint256 totalVolume);
     event RewardPaid(address indexed user, uint256 reward);
+    event LogData(uint256 indexed data);
 
     constructor(
         address _rewardsTokenAddress,
         address initialOwner
     ) Ownable(initialOwner) {
         rewardsToken = IERC20(_rewardsTokenAddress);
-        currentPeriodId = 1;
-        Period storage firstPeriod = periods[currentPeriodId];
-        firstPeriod.startTime = block.timestamp;
-        firstPeriod.endTime = block.timestamp + REWARD_PERIOD;
-        firstPeriod.totalVolume = 0;
+        lastPeriodIndex = 0;
+        lastPeriodEndTime = block.timestamp + REWARD_PERIOD;
     }
 
-    modifier onlyDexBaseContract() {
-        require(msg.sender == dexBaseContract, "Caller is not DEXBaseContract");
-        _;
+    function setDexBaseContract(address _address) external onlyOwner {
+        require(_address != address(0), "Invalid address");
+        dexBaseContract = _address;
+    }
+    function getCurrentPeriodId() external view returns (uint256) {
+        return lastPeriodIndex;
     }
 
-    function recordTrade(address trader, uint256 amount) external onlyOwner {
-        if (block.timestamp > periods[currentPeriodId].endTime) {
-            tradeNumber = 0;
-            currentPeriodId++;
-            periods[currentPeriodId].startTime = block.timestamp;
-            periods[currentPeriodId].endTime = block.timestamp + REWARD_PERIOD;
-            periods[currentPeriodId].totalVolume = 0;
-            periods[currentPeriodId].totalTradeNumber = 0;
-        }
-        Period storage period = periods[currentPeriodId];
-        period.totalVolume += amount;
-        tradeNumber++;
-        period.totalTradeNumber++;
-        period.trades[trader].push(
-            Trade(block.timestamp, amount, period.totalVolume, tradeNumber)
-        );
-    }
 
     function isPeriodEnded() public view returns (bool) {
-        return block.timestamp > periods[currentPeriodId].endTime;
+        return block.timestamp > lastPeriodEndTime;
     }
-    function notifyNewTransaction(address trader, uint256 amount) external onlyDexBaseContract{
+    function notifyNewTrade(address trader, uint256 amount) external onlyOwner{
         // Record the transaction
         addTradeToPeriod(amount, trader);
     }
-    function addTradeToPeriod(uint256 amount, address traderAddress) public onlyDexBaseContract{
-        // Increment the transaction number
-        tradeNumber++;
-        Trade memory newTrade = Trade({
-            timestamp: block.timestamp,
-            traderVolume: periods[currentPeriodId].trades[traderAddress].traderVolume + amount,
-            totalVolumeAtTrade: periods[currentPeriodId].totalVolumeAtTrade + amount,
-            tradeNumber: tradeNumber
-        });
-        periods[currentPeriodId].trades[traderAddress].push(newTrade);
+    function getLastTradeForTraderInPeriod(uint256 periodId, address traderAddress) public view returns (Trade memory) {
+        uint256[] storage tradeIds = periodTraderToTradeIdMap[periodId][traderAddress];
+        require(tradeIds.length > 0, "Trader has no trades in this period");
+        uint256 lastTradeId = tradeIds[tradeIds.length - 1];
+        return trades[lastTradeId]; // Assuming you have a trades array where Trade structs are stored
     }
 
-    function addNewPeriod() public onlyDexBaseContract {
-        uint256 periodEndTime;
-        currentPeriodId++;
-        if (periods[currentPeriodId].startTime == 0) {
-            periodEndTime = block.timestamp + REWARD_PERIOD;
+    function addTradeToPeriod(uint256 amount, address traderAddress) public onlyOwner{
+        uint256 newTraderVolume = 0;
+        if(lastPeriodEndTime < block.timestamp){
+            addNewPeriod();
+        }
+        Trade memory newTrade;
+        uint256[] storage traderTrades = periodTraderToTradeIdMap[lastPeriodIndex][traderAddress];
+        if (traderTrades.length != 0) {
+            // If the trader has previous trades in the current period, update the latest trade's volume
+            uint256 lastTradeId = traderTrades[traderTrades.length - 1]; // Get the last trade ID for this trader in the current period
+            if (lastTradeId < trades.length) {
+                Trade storage lastTrade = trades[lastTradeId]; 
+                newTraderVolume = lastTrade.traderVolume + amount; // Update the volume
+            } 
+            uint256 totalVolumeAtTrade = 0;
+            if (trades.length > 0) {
+                totalVolumeAtTrade = trades[trades.length - 1].totalVolumeAtTrade + amount;
+            }
+            newTrade = Trade({
+                timestamp: block.timestamp,
+                traderVolume: newTraderVolume, // Use the calculated new trader volume
+                totalVolumeAtTrade: totalVolumeAtTrade,
+                tradeId: lastTradeIndex + 1 // Assuming trade IDs are 1-indexed
+            });
+            
+        } else {
+            uint256 totalVolumeAtTrade = 0;
+            if(trades.length > 0) {
+                totalVolumeAtTrade = trades[trades.length - 1].totalVolumeAtTrade;
+            }
+            newTrade = Trade({
+                timestamp: block.timestamp,
+                traderVolume: amount, // Use the calculated new trader volume
+                totalVolumeAtTrade: totalVolumeAtTrade,
+                tradeId: lastTradeIndex + 1 // Assuming trade IDs are 1-indexed
+            });
+        }
+        trades.push(newTrade); // Add the new trade to the trades array
+        uint256 tradeId = trades.length; // The ID of the new trade, assuming IDs are 1-indexed based on array position
+        // Map the trade ID to the trader for the current period
+        periodTraderToTradeIdMap[lastPeriodIndex][traderAddress].push(tradeId);
+        lastTradeIndex++; // Increment lastTradeIndex for the next trade
+    }
+
+    function addNewPeriod() public onlyOwner {
+        if (lastPeriodIndex == 0) {
+            lastPeriodEndTime = block.timestamp + REWARD_PERIOD;
         } else {
             require(isPeriodEnded() == true, "Period has not ended yet");
             // If not the first period, calculate the end time based on the last period's end time
-            periodEndTime =
-                periods[currentPeriodId - 1].endTime +
+            lastPeriodEndTime =
+                lastPeriodEndTime +
                 REWARD_PERIOD;
         }
-        Period storage newPeriod = periods[currentPeriodId];
-        newPeriod.startTime = block.timestamp;
-        newPeriod.endTime = block.timestamp + REWARD_PERIOD;
-        newPeriod.totalVolume = 0;
+        lastPeriodIndex++;
     }
 
-    function claimReward(address trader) external {
-        require(
-            lastClaimedPeriod[trader] < currentPeriodId,
-            "Rewards already claimed for the latest period"
-        );
+   function claimReward(address trader) external {
+    require(
+        lastClaimedPeriod[trader] < lastPeriodIndex - 1,
+        "Rewards already claimed for the latest period"
+    );
+    uint256 rewardToClaim = 0;
 
-        uint256 rewardToClaim = 0;
-        for (
-            uint256 periodId = lastClaimedPeriod[trader] + 1;
-            periodId <= currentPeriodId;
-            periodId++
-        ) {
-            Period storage period = periods[periodId];
-            Trade[] storage selectedTradersTrades = period.trades[trader];
-            uint256 periodReward = 0;
-            for (
-                uint256 i = selectedTradersTrades[0].tradeNumber;
-                i <
-                period.totalTradeNumber - selectedTradersTrades[0].tradeNumber;
-                i++
-            ) {
-                Trade storage trade = selectedTradersTrades[i];
-                uint256 timeWeight = trade.timestamp -
-                    selectedTradersTrades[i + 1].timestamp;
-                uint256 volumeShare = trade.traderVolume /
-                    trade.totalVolumeAtTrade;
-                periodReward += (volumeShare * timeWeight);
+    for (
+        uint256 periodId = lastClaimedPeriod[trader] + 1;
+        periodId < lastPeriodIndex;
+        periodId++
+    ) {
+        uint256[] storage tradeIds = periodTraderToTradeIdMap[periodId][trader];
+        if(tradeIds.length == 0) continue; // Skip if no trades in this period
+
+        uint256 periodReward = 0;
+        for (uint256 i = 0; i < tradeIds.length; i++) {
+            Trade storage trade = trades[tradeIds[i]]; 
+            // Assuming you have a way to calculate `timeWeight` and `totalVolumeInPeriod` for the period
+            uint256 timeWeight = (i < tradeIds.length - 1) ? 
+                                 (trades[tradeIds[i + 1] - 1].timestamp - trade.timestamp) : 
+                                 (lastPeriodEndTime - trade.timestamp);
+            uint256 volumeShare = 0;
+            
+            if (trade.totalVolumeAtTrade > 0) {
+                volumeShare = trade.traderVolume * 10**18 / trade.totalVolumeAtTrade;
             }
-            periodReward *= REWARD_RATE;
-            rewardToClaim += periodReward;
+            console.log("timeWeight: ", timeWeight);   
+            console.log("volumeShare: ", volumeShare);
+            console.log("totalVolumeAtTrade: ", trade.totalVolumeAtTrade);
+            periodReward += (volumeShare * timeWeight) / 10**18; // Adjust back after calculation
         }
-
-        lastClaimedPeriod[trader] = currentPeriodId;
-        if (rewardToClaim > 0) {
-            rewardsToken.safeTransfer(trader, rewardToClaim);
-            emit RewardPaid(trader, rewardToClaim);
-        }
+        console.log("periodReward: ", periodReward);
+        periodReward = periodReward * REWARD_RATE / 10**3; // Adjust the calculation based on your reward logic
+        console.log("periodReward: ", periodReward);
+        rewardToClaim += periodReward;
     }
+
+    lastClaimedPeriod[trader] = lastPeriodIndex - 1;
+    console.log("lastClaimedPeriod[trader]: ", lastClaimedPeriod[trader]);
+    if (rewardToClaim > 0) {
+        console.log("rewardToClaim: ", rewardToClaim);  
+        rewardsToken.safeTransfer(trader, rewardToClaim);
+        emit RewardPaid(trader, rewardToClaim);
+    }
+}
 }

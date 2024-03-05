@@ -18,7 +18,6 @@ contract DEXBaseContract is ISharedDefinitions {
     
     // Mapping of positions by trader
     mapping(address => Position[]) public positions;
-
     
 	// modifier for development mode
     modifier onlyInDevelopment() {
@@ -33,7 +32,6 @@ contract DEXBaseContract is ISharedDefinitions {
 	*   isDevelopment = _isDevelopment;
 	*}
 	*/
-	
 	constructor(address _baseCurrency, address _dexRewardsContract, bool _isDevelopment) {
 		baseCurrency = IERC20(_baseCurrency);
 		dexRewardsContract = DexRewardsContract(_dexRewardsContract);
@@ -76,7 +74,7 @@ contract DEXBaseContract is ISharedDefinitions {
 
      // Function to open a long or short position
     function openPosition(uint256 amount, bool isLong, uint256 leverage) external {
-		if (dexRewardsContract.isPeriodEnded()) {
+		if (dexRewardsContract.isPeriodEnded() || dexRewardsContract.getCurrentPeriodId() == 0){
             dexRewardsContract.addNewPeriod();
         }
         require(amount > 0, "Amount must be greater than 0");
@@ -96,13 +94,13 @@ contract DEXBaseContract is ISharedDefinitions {
         });
 
         positions[msg.sender].push(newPosition);
-        dexRewardsContract.addTransactionToPeriod(newPosition.amount, newPosition.trader);
+        dexRewardsContract.notifyNewTrade(newPosition.trader, newPosition.amount);
         emit PositionOpened(msg.sender, amount, isLong, openPrice, leverage);
     }
 
     // Function to close a position
     function closePosition(uint256 positionIndex) external {
-		if (dexRewardsContract.isPeriodEnded()) {
+		if (dexRewardsContract.isPeriodEnded() || dexRewardsContract.getCurrentPeriodId() == 0) {
             dexRewardsContract.addNewPeriod();
         }
         Position storage position = positions[msg.sender][positionIndex];
@@ -124,7 +122,7 @@ contract DEXBaseContract is ISharedDefinitions {
 
         // Remove the position
         delete positions[msg.sender][positionIndex];
-        dexRewardsContract.addTransactionToPeriod(position.amount, position.trader);
+        dexRewardsContract.notifyNewTrade(position.trader, position.amount);
         emit PositionClosed(msg.sender, position.amount, position.isLong, closePrice);
     }
 }

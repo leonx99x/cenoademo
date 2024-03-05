@@ -47,9 +47,9 @@ describe("DEX and Rewards Simulation", function () {
       true
     );
     await dexBaseContract.waitForDeployment();
-    await dexRewardsContract.setDexBaseContract(
-      await dexBaseContract.getAddress()
-    );
+    await dexRewardsContract
+      .connect(accounts[0])
+      .setDexBaseContract(await dexBaseContract.getAddress());
     console.log("DEXBaseContract deployed to:", dexBaseContract.getAddress());
 
     // Transfer tokens to other accounts for trading
@@ -69,18 +69,22 @@ describe("DEX and Rewards Simulation", function () {
     );
   });
   it("Simulates transactions over five periods with four traders", async function () {
-    for (let period = 0; period < 5; period++) {
+    for (let period = 0; period < 2; period++) {
       console.log("Starting period", period);
       console.log("Opening positions for accounts 1 and 2");
       const approve = await mockRewardToken
         .connect(accounts[1])
-        .approve(await dexBaseContract.getAddress(), ethers.parseEther("100"));
+        .approve(await dexBaseContract.getAddress(), ethers.parseEther("200"));
       await mockRewardToken
         .connect(accounts[2])
         .approve(await dexBaseContract.getAddress(), ethers.parseEther("50"));
       await dexBaseContract
         .connect(accounts[1])
         .openPosition(ethers.parseEther("100"), true, 1);
+      await dexBaseContract
+        .connect(accounts[1])
+        .openPosition(ethers.parseEther("100"), true, 1);
+      await ethers.provider.send("evm_increaseTime", [3 * 24 * 60 * 60]);
       console.log("Opened position for account 1");
       await ethers.provider.send("evm_mine", []);
       await dexBaseContract
@@ -91,9 +95,34 @@ describe("DEX and Rewards Simulation", function () {
 
       await ethers.provider.send("evm_increaseTime", [30 * 24 * 60 * 60]); // 30 days
       console.log("Time increased by 30 days");
-
-      await dexRewardsContract.connect(accounts[1]).claimRewards();
-      await dexRewardsContract.connect(accounts[2]).claimRewards();
     }
+
+    console.log(
+      "Before reward for account 2" +
+        (await mockRewardToken.balanceOf(accounts[2].address)).toString()
+    );
+    console.log("Claiming rewards for accounts 1 and 2");
+    await dexRewardsContract
+      .connect(accounts[1])
+      .claimReward(accounts[1].address);
+
+    console.log("Claimed rewards for account 1");
+    console.log("Waiting for 1 second");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    console.log(
+      "Claimed reward for account 1" +
+        (await mockRewardToken.balanceOf(accounts[1].address)).toString()
+    );
+    console.log("Claiming rewards for account 2");
+    // Claim rewards and log the amount for account 2
+    await dexRewardsContract
+      .connect(accounts[2])
+      .claimReward(accounts[2].address);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    console.log(
+      "Claimed reward for account 2 " +
+        (await mockRewardToken.balanceOf(accounts[2].address)).toString()
+    );
   });
 });

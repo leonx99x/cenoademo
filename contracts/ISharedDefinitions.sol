@@ -16,15 +16,7 @@ interface ISharedDefinitions {
         uint256 timestamp;
         uint256 traderVolume;
         uint256 totalVolumeAtTrade;
-        uint256 tradeNumber;
-    }
-
-    struct Period {
-        uint256 startTime;
-        uint256 endTime;
-        uint256 totalVolume;;
-        mapping(address => Trade[]) trades;
-	    uint256 totalTradeNumber;
+        uint256 tradeId;
     }
     
 }
